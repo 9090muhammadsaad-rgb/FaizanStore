@@ -1,0 +1,358 @@
+<!doctype html>
+
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Faizan Store</title>
+  <style>
+    /* Simple Play-Store-like styling */
+    :root{--accent:#1a73e8;--bg:#f5f7fb;--card:#fff}
+    body{margin:0;font-family:Inter,ui-sans-serif,system-ui,Arial;background:var(--bg);color:#111}
+    header{background:linear-gradient(180deg,white, #f1f5fb);padding:18px 24px;display:flex;align-items:center;gap:16px;box-shadow:0 2px 6px rgba(20,20,60,0.04);}
+    .logo{display:flex;flex-direction:column}
+    h1{margin:0;font-size:20px}
+    .searchbar{margin-left:auto;display:flex;align-items:center;gap:8px}
+    input[type=search]{padding:10px 12px;border-radius:8px;border:1px solid #d6dce9;width:320px}
+    select{padding:9px;border-radius:8px;border:1px solid #d6dce9}
+    main{padding:20px;max-width:1200px;margin:0 auto}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:18px}
+    .card{background:var(--card);border-radius:12px;padding:14px;box-shadow:0 6px 18px rgba(20,20,60,0.06);display:flex;flex-direction:column;gap:10px}
+    .card .icon{width:72px;height:72px;border-radius:12px;background:#eee;flex-shrink:0;object-fit:cover}
+    .meta{display:flex;gap:12px;align-items:center}
+    .title{font-weight:600}
+    .small{font-size:13px;color:#556}
+    .screens{display:flex;gap:8px;overflow:auto}
+    .screens img{height:80px;border-radius:6px}
+    .actions{display:flex;gap:8px;flex-wrap:wrap}
+    a.button{display:inline-block;padding:8px 12px;border-radius:8px;text-decoration:none;background:var(--accent);color:white}
+    footer{margin-top:30px;padding:18px;background:#000;color:#fff;text-align:center;border-radius:8px}
+    .muted{color:#666}
+    .empty{padding:40px;text-align:center;color:#444;background:#fff;border-radius:12px}
+    .loader{padding:24px;text-align:center}
+    .about{font-size:13px;color:#333}
+    @media (max-width:600px){input[type=search]{width:140px}}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">
+      <h1>Faizan Store</h1>
+      <div class="small">A GitHub-backed game store</div>
+    </div><div class="searchbar">
+  <input id="q" type="search" placeholder="Search games... (name, package)" />
+  <select id="sort">
+    <option value="newest">Newest → Oldest</option>
+    <option value="oldest">Oldest → Newest</option>
+    <option value="az">A → Z</option>
+    <option value="za">Z → A</option>
+  </select>
+</div>
+
+  </header>  <main>
+    <div id="status" class="loader">Loading store…</div>
+    <div id="store" class="grid" style="display:none"></div>
+    <div id="empty" class="empty" style="display:none">This web not any data found</div>
+    <footer>(c) github cloud</footer>
+  </main>  <script>
+    /*************************************************************************
+     Configuration — set repository owner, repo and branch here.
+     Put this index.html into that repo (root) and open the page (via raw/githack or GitHub Pages).
+    *************************************************************************/
+    const CONFIG = {
+      owner: 'REPLACE_OWNER', // e.g. 'your-username'
+      repo: 'REPLACE_REPO',   // e.g. 'my-game-repo'
+      branch: 'main'          // branch name
+    };
+
+    // Helper: build raw.githubusercontent URL for a file path
+    function rawUrl(path){
+      return `https://raw.githubusercontent.com/${CONFIG.owner}/${CONFIG.repo}/${CONFIG.branch}/${path}`;
+    }
+
+    // Helper: GitHub API contents URL
+    function apiContents(path){
+      return `https://api.github.com/repos/${CONFIG.owner}/${CONFIG.repo}/contents/${path}?ref=${CONFIG.branch}`;
+    }
+
+    // UI elements
+    const statusEl = document.getElementById('status');
+    const storeEl = document.getElementById('store');
+    const emptyEl = document.getElementById('empty');
+    const qEl = document.getElementById('q');
+    const sortEl = document.getElementById('sort');
+
+    qEl.addEventListener('input', renderFromCache);
+    sortEl.addEventListener('change', renderFromCache);
+
+    // app state
+    let GAMES = []; // array of {name, path, icon, screenshots:[], videos:[], downloads: [{label, url, about}], app_info: {...}, description: '...'}
+
+    // Start
+    loadStore().catch(err => {
+      console.error(err);
+      statusEl.textContent = 'Error loading store — check console. Make sure CONFIG owner/repo/branch are set and repository is public.';
+    });
+
+    async function loadStore(){
+      statusEl.textContent = 'Reading repository root…';
+
+      // fetch root contents
+      const root = await fetchJson(apiContents(''));
+      // Filter directories that look like games: end with _game or game
+      const gameDirs = root.filter(item => item.type === 'dir' && /_?game$/i.test(item.name));
+
+      if(!gameDirs.length){
+        statusEl.style.display='none';
+        emptyEl.style.display='block';
+        return;
+      }
+
+      statusEl.textContent = `Found ${gameDirs.length} game(s). Fetching details…`;
+
+      // parallel fetch details for each game dir
+      const promises = gameDirs.map(d => fetchGame(d.name));
+      GAMES = await Promise.all(promises);
+
+      statusEl.style.display='none';
+      renderFromCache();
+    }
+
+    async function fetchGame(dirName){
+      const base = `${dirName}`; // path relative to repo root
+      const game = {name: dirName, path: base, icon:null, screenshots:[], videos:[], downloads:[], app_info:{}, description:''};
+
+      try{
+        // list this dir
+        const contents = await fetchJson(apiContents(base));
+
+        // icon — check for icon.png or icon.jpg in the last-level directory (user said "last name game directory")
+        const iconFile = contents.find(f => /icon\.(png|jpg|jpeg)$/i.test(f.name));
+        if(iconFile){
+          game.icon = rawUrl(`${base}/${iconFile.name}`);
+        }
+
+        // description folder
+        const descEntry = contents.find(f => f.type==='dir' && /description/i.test(f.name));
+        if(descEntry){
+          // read any text files in description dir
+          const descFiles = await fetchJson(apiContents(`${base}/${descEntry.name}`));
+          const textFile = descFiles.find(f => /\.txt$|\.md$|\.html$|\.json$/i.test(f.name)) || descFiles[0];
+          if(textFile){
+            game.description = await fetchRawText(`${base}/${descEntry.name}/${textFile.name}`);
+          }
+        }
+
+        // assets/screenshots or assets
+        const assetsDir = contents.find(f => f.type==='dir' && /assets/i.test(f.name));
+        if(assetsDir){
+          const assetsFiles = await fetchJson(apiContents(`${base}/${assetsDir.name}`));
+          // look for screenshots subdir
+          const scrDir = assetsFiles.find(f => f.type==='dir' && /screen|shot|ss/i.test(f.name));
+          if(scrDir){
+            const snaps = await fetchJson(apiContents(`${base}/${assetsDir.name}/${scrDir.name}`));
+            game.screenshots = snaps.filter(s=>/\.(png|jpe?g|webp)$/i.test(s.name)).map(s=>rawUrl(`${base}/${assetsDir.name}/${scrDir.name}/${s.name}`));
+          } else {
+            // fallback: images directly inside assets
+            game.screenshots = assetsFiles.filter(s=>/\.(png|jpe?g|webp)$/i.test(s.name)).map(s=>rawUrl(`${base}/${assetsDir.name}/${s.name}`));
+          }
+          // videos: find video files
+          const vids = assetsFiles.filter(s=>/\.(mp4|webm)$/i.test(s.name));
+          if(vids.length) game.videos = vids.map(v=>rawUrl(`${base}/${assetsDir.name}/${v.name}`));
+        }
+
+        // downloads folder
+        const dlDir = contents.find(f=>f.type==='dir' && /download/i.test(f.name));
+        if(dlDir){
+          const dlFiles = await fetchJson(apiContents(`${base}/${dlDir.name}`));
+
+          // We expect files like download1 (no ext) and download1.txt
+          // Build a map: key without ext -> {linkFile, aboutFile}
+          const map = {};
+          for(const f of dlFiles){
+            const name = f.name;
+            const key = name.replace(/\.txt$/i, '');
+            if(/\.txt$/i.test(name)){
+              map[key] = map[key]||{};
+              map[key].about = await fetchRawText(`${base}/${dlDir.name}/${name}`);
+            } else {
+              // treat as link file — fetch its raw text (the download URL)
+              map[key] = map[key]||{};
+              map[key].link = await fetchRawText(`${base}/${dlDir.name}/${name}`);
+            }
+          }
+          // push to downloads array
+          for(const k of Object.keys(map)){
+            const item = map[k];
+            if(item.link) game.downloads.push({label:k, url:item.link.trim(), about:item.about||''});
+          }
+        }
+
+        // app_info folder
+        const appInfoDir = contents.find(f=>f.type==='dir' && /app_info/i.test(f.name));
+        if(appInfoDir){
+          const infoFiles = await fetchJson(apiContents(`${base}/${appInfoDir.name}`));
+          for(const f of infoFiles){
+            const key = f.name.replace(/\.[^/.]+$/, '');
+            try{
+              const text = await fetchRawText(`${base}/${appInfoDir.name}/${f.name}`);
+              game.app_info[key] = text.trim();
+            }catch(e){/*ignore*/}
+          }
+        }
+
+        // if no icon found in top-level, try icon inside an images folder or assets
+        if(!game.icon){
+          // search deeper: check assets dir for icon
+          if(assetsDir){
+            const tryIcon = (await fetchJson(apiContents(`${base}/${assetsDir.name}`))).find(f=>/icon\.(png|jpg|jpeg)/i.test(f.name));
+            if(tryIcon) game.icon = rawUrl(`${base}/${assetsDir.name}/${tryIcon.name}`);
+          }
+        }
+
+      }catch(err){
+        console.warn('Error fetching game', dirName, err);
+      }
+
+      return game;
+    }
+
+    // Render using GAMES cache with search & sort
+    function renderFromCache(){
+      storeEl.innerHTML = '';
+      const q = qEl.value.trim().toLowerCase();
+      let list = GAMES.slice();
+
+      // search filter: name, app_info.package, app_info.app_name, description
+      if(q){
+        list = list.filter(g=>{
+          const combined = [g.name, g.app_info.app_name, g.app_info.package, g.description].filter(Boolean).join(' ').toLowerCase();
+          return combined.indexOf(q) !== -1;
+        });
+      }
+
+      // sort
+      const sort = sortEl.value;
+      if(sort === 'newest' || sort === 'oldest'){
+        list.sort((a,b)=>{
+          const da = parseDate(a.app_info.date);
+          const db = parseDate(b.app_info.date);
+          if(!da && !db) return 0;
+          if(!da) return 1;
+          if(!db) return -1;
+          return sort === 'newest' ? db - da : da - db;
+        });
+      } else if(sort === 'az'){
+        list.sort((a,b)=>a.name.localeCompare(b.name));
+      } else if(sort === 'za'){
+        list.sort((a,b)=>b.name.localeCompare(a.name));
+      }
+
+      if(!list.length){
+        emptyEl.style.display='block';
+        storeEl.style.display='none';
+        return;
+      } else {
+        emptyEl.style.display='none';
+        storeEl.style.display='grid';
+      }
+
+      for(const g of list){
+        const card = document.createElement('div'); card.className='card';
+        const meta = document.createElement('div'); meta.className='meta';
+        const icon = document.createElement('img'); icon.className='icon';
+        icon.src = g.icon || placeholderIcon(g.name);
+        icon.alt = g.name + ' icon';
+        meta.appendChild(icon);
+        const info = document.createElement('div');
+        const title = document.createElement('div'); title.className='title';
+        title.textContent = (g.app_info.app_name || g.name).replace(/_/g,' ');
+        info.appendChild(title);
+        const small = document.createElement('div'); small.className='small';
+        small.innerHTML = `${g.app_info.package ? escapeHtml(g.app_info.package) + ' • ' : ''}${g.app_info.version ? 'v' + escapeHtml(g.app_info.version) + ' • ' : ''}${g.app_info.date ? escapeHtml(g.app_info.date) : ''}`;
+        info.appendChild(small);
+        meta.appendChild(info);
+        card.appendChild(meta);
+
+        if(g.screenshots && g.screenshots.length){
+          const scr = document.createElement('div'); scr.className='screens';
+          for(const s of g.screenshots){
+            const im = document.createElement('img'); im.src=s; im.alt='screenshot'; scr.appendChild(im);
+          }
+          card.appendChild(scr);
+        }
+
+        if(g.description){
+          const d = document.createElement('div'); d.className='about'; d.innerHTML = truncate(g.description, 280);
+          card.appendChild(d);
+        }
+
+        // downloads
+        if(g.downloads && g.downloads.length){
+          const actions = document.createElement('div'); actions.className='actions';
+          for(const dl of g.downloads){
+            const a = document.createElement('a');
+            a.href = dl.url;
+            a.target = '_blank';
+            a.rel = 'noopener';
+            a.className='button';
+            a.textContent = (dl.label || 'Download');
+            a.title = dl.about || '';
+            actions.appendChild(a);
+          }
+          card.appendChild(actions);
+        }
+
+        storeEl.appendChild(card);
+      }
+    }
+
+    // Utilities
+    function truncate(text,max){
+      if(!text) return '';
+      const t = text.replace(/\n/g,' ').trim();
+      return t.length>max ? (t.slice(0,max-1) + '…') : t;
+    }
+
+    function placeholderIcon(name){
+      // simple data url with initials
+      const initials = name.replace(/_game$/i,'').split(/[^a-zA-Z0-9]/).map(s=>s[0]).join('').slice(0,2).toUpperCase();
+      const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128'><rect width='100%' height='100%' fill='#e6eefc'/><text x='50%' y='55%' dominant-baseline='middle' text-anchor='middle' font-family='Arial' font-size='48' fill='#1a73e8'>${initials}</text></svg>`;
+      return 'data:image/svg+xml;utf8,'+encodeURIComponent(svg);
+    }
+
+    function escapeHtml(s){ return String(s).replace(/[&<>\"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+    function parseDate(s){
+      if(!s) return null;
+      const d = Date.parse(s);
+      return isNaN(d) ? null : d;
+    }
+
+    async function fetchJson(url){
+      const r = await fetch(url, {headers: {'Accept':'application/vnd.github.v3+json'}});
+      if(r.status===404) throw new Error('Not found: ' + url);
+      if(!r.ok) throw new Error('GitHub API error: ' + r.status + ' ' + r.statusText + ' — ' + url);
+      return r.json();
+    }
+
+    async function fetchRawText(path){
+      const url = rawUrl(path);
+      const r = await fetch(url);
+      if(!r.ok) throw new Error('Failed to fetch raw: ' + url);
+      return r.text();
+    }
+
+    // Expose a helper function to let user set config at runtime (useful when opening raw file in browser)
+    window.FaizanStore = {
+      setConfig: (owner, repo, branch='main')=>{
+        CONFIG.owner = owner; CONFIG.repo=repo; CONFIG.branch=branch; statusEl.style.display='block'; statusEl.textContent='Reloading store…'; GAMES=[]; storeEl.innerHTML=''; loadStore();
+      }
+    };
+
+    // If CONFIG not set (placeholder values) show instruction
+    if(CONFIG.owner === 'REPLACE_OWNER' || CONFIG.repo === 'REPLACE_REPO'){
+      statusEl.innerHTML = `Please edit the top of this index.html and set <code>CONFIG.owner</code> and <code>CONFIG.repo</code> (and branch if needed). Then reload the page.`;
+    }
+  </script></body>
+</html>
