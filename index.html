@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FaizanStore</title>
+  <style>
+    body {
+      background: #0f172a;
+      color: #f8fafc;
+      font-family: 'Segoe UI', Tahoma, sans-serif;
+      margin: 0;
+    }
+    header {
+      text-align: center;
+      padding: 1.2rem;
+      background: #1e293b;
+      color: #38bdf8;
+      font-weight: bold;
+      font-size: 1.7rem;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.4);
+    }
+    .container {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1rem;
+      padding: 1rem;
+    }
+    .card {
+      background: #1e293b;
+      border-radius: 10px;
+      box-shadow: 0 3px 10px rgba(0,0,0,0.5);
+      overflow: hidden;
+      transition: transform 0.2s;
+    }
+    .card:hover { transform: scale(1.03); }
+    .icon {
+      width: 100%;
+      height: 180px;
+      object-fit: cover;
+      background: #334155;
+    }
+    .content { padding: 1rem; }
+    h2 {
+      color: #38bdf8;
+      margin: 0 0 0.5rem 0;
+    }
+    p {
+      color: #cbd5e1;
+      margin: 0.3rem 0;
+      font-size: 0.95rem;
+    }
+    .downloads a {
+      display: block;
+      background: #38bdf8;
+      color: #0f172a;
+      padding: 0.4rem;
+      border-radius: 6px;
+      margin: 0.3rem 0;
+      text-decoration: none;
+      text-align: center;
+      font-weight: bold;
+    }
+    .downloads a:hover { background: #7dd3fc; }
+    footer {
+      text-align: center;
+      padding: 1rem;
+      background: #1e293b;
+      color: #94a3b8;
+      font-size: 0.9rem;
+    }
+    .error {
+      text-align: center;
+      color: #f87171;
+      font-weight: bold;
+      margin-top: 2rem;
+    }
+    .loading {
+      text-align: center;
+      color: #38bdf8;
+      font-weight: bold;
+      margin-top: 2rem;
+    }
+  </style>
+</head>
+<body>
+  <header>🎮 FaizanStore</header>
+  <div id="loading" class="loading">Loading games...</div>
+  <div id="games" class="container"></div>
+  <div id="error" class="error"></div>
+  <footer>© 2025 FaizanStore | Powered by GitHub Pages</footer>
+
+  <script>
+    const repoUser = "9090muhammadsaad-rgb";
+    const repoName = "FaizanStore";
+    const branch = "main";
+    const apiUrl = `https://api.github.com/repos/${repoUser}/${repoName}/contents/`;
+
+    async function fetchText(url) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw 0;
+        return res.text();
+      } catch {
+        return "N/A";
+      }
+    }
+
+    async function fileExists(url) {
+      try {
+        const res = await fetch(url, { method: "HEAD" });
+        return res.ok;
+      } catch {
+        return false;
+      }
+    }
+
+    async function loadGames() {
+      const gamesDiv = document.getElementById("games");
+      const loadingDiv = document.getElementById("loading");
+      const errorDiv = document.getElementById("error");
+      loadingDiv.textContent = "⏳ Loading games...";
+
+      try {
+        const res = await fetch(apiUrl);
+        if (!res.ok) throw new Error("Failed to fetch repo");
+        const folders = await res.json();
+
+        const gameFolders = folders.filter(
+          (i) => i.type === "dir" && i.name.endsWith("_game")
+        );
+        if (gameFolders.length === 0) {
+          loadingDiv.remove();
+          errorDiv.textContent = "⚠️ No games found.";
+          return;
+        }
+
+        // parallel load for faster performance
+        await Promise.all(
+          gameFolders.map(async (game) => {
+            const base = `https://raw.githubusercontent.com/${repoUser}/${repoName}/${branch}/${game.name}`;
+            const [appName, pkg, version, date, desc] = await Promise.all([
+              fetchText(`${base}/game/app_info/app_name`),
+              fetchText(`${base}/game/app_info/package`),
+              fetchText(`${base}/game/app_info/version`),
+              fetchText(`${base}/game/app_info/date`),
+              fetchText(`${base}/description/description.txt`)
+            ]);
+
+            let iconUrl = `${base}/icon.png`;
+            if (!(await fileExists(iconUrl))) {
+              iconUrl = `${base}/icon.jpg`;
+              if (!(await fileExists(iconUrl))) iconUrl = "";
+            }
+
+            const [d1, d1txt, d2, d2txt] = await Promise.all([
+              fetchText(`${base}/game/download/download1`),
+              fetchText(`${base}/game/download/download1.txt`),
+              fetchText(`${base}/game/download/download2`),
+              fetchText(`${base}/game/download/download2.txt`)
+            ]);
+
+            const card = document.createElement("div");
+            card.className = "card";
+            card.innerHTML = `
+              <img class="icon" src="${iconUrl}" alt="Icon N/A" onerror="this.src='';this.alt='Icon N/A';">
+              <div class="content">
+                <h2>${appName}</h2>
+                <p><b>Package:</b> ${pkg}</p>
+                <p><b>Version:</b> ${version}</p>
+                <p><b>Date:</b> ${date}</p>
+                <p><b>Description:</b> ${desc}</p>
+                <div class="downloads">
+                  ${d1 !== "N/A" ? `<a href="${d1}" target="_blank">Download 1</a><p>${d1txt}</p>` : ""}
+                  ${d2 !== "N/A" ? `<a href="${d2}" target="_blank">Download 2</a><p>${d2txt}</p>` : ""}
+                </div>
+              </div>
+            `;
+            gamesDiv.appendChild(card);
+          })
+        );
+
+        loadingDiv.remove();
+      } catch (err) {
+        loadingDiv.remove();
+        errorDiv.textContent = "⚠️ Failed to load games.";
+        console.error(err);
+      }
+    }
+
+    loadGames();
+  </script>
+</body>
+</html>
